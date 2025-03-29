@@ -1,16 +1,32 @@
 {
   "name": "tiktok-live-backend",
   "version": "1.0.0",
-  "description": "TikTok Live Monitor Backend",
+  "description": "WebSocket server for TikTok livestream integration",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "dependencies": {
     "ws": "^8.16.0",
-    "tiktok-live-connector": "^1.0.3"
+    "tiktok-live-connector": "^0.9.33"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   },
   "engines": {
     "node": ">=14"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zharemo/tiktok-live-backend"
+  },
+  "keywords": [
+    "tiktok",
+    "livestream",
+    "websocket",
+    "api"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
 }
