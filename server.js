@@ -26,7 +26,7 @@ class EnhancedTikTokConnection {
     
     async connect() {
         try {
-            // Create a new connection
+            // Create a new connection with the full options object
             this.connection = new WebcastPushConnection(this.options);
             
             // Connect and register any event handlers
@@ -139,6 +139,7 @@ wss.on('connection', async (ws, req) => {
     
     // Setup connection options
     const connectionOptions = {
+        uniqueId: username,
         processInitialData: true,
         enableExtendedGiftInfo: true,
         enableWebsocketUpgrade: true,
@@ -164,11 +165,8 @@ wss.on('connection', async (ws, req) => {
         }
     }
     
-    // Create TikTok connection
-    const tiktokConnection = new EnhancedTikTokConnection({
-        ...connectionOptions,
-        uniqueId: username
-    });
+    // Create TikTok connection with the full options object
+    const tiktokConnection = new EnhancedTikTokConnection(connectionOptions);
     
     try {
         await tiktokConnection.connect();
