@@ -16,9 +16,11 @@ app.get('/', (req, res) => {
 wss.on('connection', (ws, req) => {
   console.log('New connection received');
   
-  // Get username from URL parameters
+  // Get parameters from URL
   const urlParams = new URLSearchParams(req.url.split('?')[1]);
   const username = urlParams.get('username');
+  const sessionId = urlParams.get('sessionid');
+  const csrfToken = urlParams.get('tt_csrf_token');
   
   if (!username) {
     ws.send(JSON.stringify({ 
@@ -30,8 +32,34 @@ wss.on('connection', (ws, req) => {
   
   console.log(`Connecting to @${username}'s livestream...`);
   
-  // Connect to TikTok
-  const tiktokLive = new WebcastPushConnection(username);
+  // Setup connection options
+  const connectionOptions = {
+    uniqueId: username,
+    processInitialData: true,
+    enableExtendedGiftInfo: true,
+    enableWebsocketUpgrade: true,
+    requestPollingIntervalMs: 2000,
+    clientParams: {
+      "app_language": "en-US",
+      "device_platform": "web",
+      "browser_name": "Mozilla",
+      "browser_version": "5.0",
+      "cookie_enabled": true,
+      "screen_width": 1920,
+      "screen_height": 1080
+    }
+  };
+
+  // Add authentication if provided
+  if (sessionId) {
+    connectionOptions.sessionId = sessionId;
+    if (csrfToken) {
+      connectionOptions.csrfToken = csrfToken;
+    }
+  }
+  
+  // Connect to TikTok with options
+  const tiktokLive = new WebcastPushConnection(connectionOptions);
   
   tiktokLive.connect().then(() => {
     console.log(`Connected to @${username}'s livestream!`);
@@ -55,12 +83,32 @@ wss.on('connection', (ws, req) => {
       ws.send(JSON.stringify({ type: 'streamEnd' }));
       tiktokLive.disconnect();
     });
+
+    // Handle room data
+    tiktokLive.on('roomInfo', data => {
+      console.log('Room info received:', data);
+      ws.send(JSON.stringify({
+        type: 'roomInfo',
+        data: data
+      }));
+    });
     
   }).catch(err => {
     console.error(`Failed to connect: ${err.message}`);
+    
+    // Handle specific error cases
+    let errorMessage = err.message;
+    if (err.message.includes('Failed to retrieve the initial room data')) {
+      errorMessage = 'TikTok login required to view this stream';
+    } else if (err.message.includes('User not found')) {
+      errorMessage = 'TikTok user not found';
+    } else if (err.message.includes('rate limit')) {
+      errorMessage = 'TikTok rate limit reached - try again later';
+    }
+    
     ws.send(JSON.stringify({ 
       type: 'error', 
-      message: err.toString() 
+      message: errorMessage
     }));
   });
   
