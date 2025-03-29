@@ -286,7 +286,7 @@ wss.on('error', (error) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
     console.log(`Server started on port ${PORT}`);
     console.log(`WebSocket URL: ws://localhost:${PORT}`);
