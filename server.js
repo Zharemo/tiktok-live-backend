@@ -139,7 +139,7 @@ wss.on('connection', async (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const action = url.searchParams.get('action') || 'monitor';
     
-    // Get the authenticated user's username
+    // Get the username
     const username = url.searchParams.get('username');
     
     if (!username) {
@@ -184,7 +184,7 @@ wss.on('connection', async (ws, req) => {
     
     ws.send(JSON.stringify({
         type: 'status',
-        message: `Connecting to your livestream...`
+        message: `Connecting to livestream...`
     }));
     
     // Setup connection options
@@ -226,7 +226,7 @@ wss.on('connection', async (ws, req) => {
         // Send success message
         ws.send(JSON.stringify({
             type: 'connected',
-            message: `Connected to your livestream!`
+            message: `Connected to livestream!`
         }));
         
         // Forward all TikTok events
@@ -266,7 +266,7 @@ wss.on('connection', async (ws, req) => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'streamEnd',
-                    message: 'Your stream ended'
+                    message: 'Stream ended'
                 }));
             }
             
@@ -308,7 +308,7 @@ wss.on('connection', async (ws, req) => {
         let errorMessage = `Failed to connect: ${error.message}`;
         
         if (error.message.includes('LIVEMONITORING_SIGN_URL_FAIL_CAUSE_CLOSED_LIVE')) {
-            errorMessage = 'You are not currently live streaming';
+            errorMessage = 'This account is not currently live streaming';
         } else if (error.message.includes('rate limit')) {
             errorMessage = 'TikTok rate limit reached - try again later';
         } else if (error.message.includes('User not found')) {
