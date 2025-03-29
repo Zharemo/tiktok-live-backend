@@ -94,11 +94,27 @@ wss.on('connection', async (ws, req) => {
     // Parse URL parameters
     const url = new URL(req.url, `http://${req.headers.host}`);
     let username = url.searchParams.get('username');
+    let uniqueId = url.searchParams.get('uniqueId');
+    
+    // Use uniqueId if available, otherwise fall back to username
+    if (uniqueId) {
+        username = uniqueId;
+    }
     
     if (!username) {
         ws.send(JSON.stringify({
             type: 'error',
             message: 'Username parameter is required'
+        }));
+        ws.close();
+        return;
+    }
+    
+    // Validate username format
+    if (username.length < 2 || username.length > 24) {
+        ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Invalid username format. Username must be between 2 and 24 characters.'
         }));
         ws.close();
         return;
@@ -272,7 +288,7 @@ wss.on('error', (error) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server started on port ${PORT}`);
     console.log(`WebSocket URL: ws://localhost:${PORT}`);
