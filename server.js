@@ -17,7 +17,15 @@ const activeConnections = new Map();
 // Custom connection wrapper for improved error handling
 class EnhancedTikTokConnection {
     constructor(options) {
-        this.options = options;
+        // Ensure uniqueId is properly set
+        this.options = {
+            ...options,
+            uniqueId: options.username || options.uniqueId,
+            requestHeaders: {
+                ...options.requestHeaders,
+                'User-Agent': options.requestHeaders?.['User-Agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+        };
         this.connection = null;
         this.retryCount = 0;
         this.maxRetries = 3;
@@ -26,6 +34,7 @@ class EnhancedTikTokConnection {
     
     async connect() {
         try {
+            console.log('Connecting with options:', JSON.stringify(this.options, null, 2));
             // Create a new connection with the full options object
             this.connection = new WebcastPushConnection(this.options);
             
@@ -42,6 +51,7 @@ class EnhancedTikTokConnection {
             return this.connection;
         } catch (error) {
             console.error(`Connection error (attempt ${this.retryCount + 1}/${this.maxRetries}):`, error.message);
+            console.error('Connection options:', JSON.stringify(this.options, null, 2));
             
             if (this.retryCount < this.maxRetries) {
                 this.retryCount++;
@@ -154,7 +164,13 @@ wss.on('connection', async (ws, req) => {
             "screen_height": 1080
         },
         sessionId: authHeaders.sessionid || authHeaders['sid_tt'],
-        csrfToken: authHeaders['tt_csrf_token']
+        csrfToken: authHeaders['tt_csrf_token'],
+        // Add these additional parameters
+        requestHeaders: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        },
+        // Add this to ensure proper username handling
+        username: username
     });
 
     // Handle WebSocket close with proper error handling
