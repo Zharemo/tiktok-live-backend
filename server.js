@@ -32,9 +32,10 @@ wss.on('connection', (ws, req) => {
   
   console.log(`Connecting to @${username}'s livestream...`);
   
-  // Setup connection options
+  // Setup connection options with both username and uniqueId
   const connectionOptions = {
-    uniqueId: username,
+    uniqueId: username,  // Set uniqueId to username
+    username: username,  // Also set username explicitly
     processInitialData: true,
     enableExtendedGiftInfo: true,
     enableWebsocketUpgrade: true,
@@ -57,6 +58,9 @@ wss.on('connection', (ws, req) => {
       connectionOptions.csrfToken = csrfToken;
     }
   }
+  
+  // Log the connection options for debugging
+  console.log('Connection options:', JSON.stringify(connectionOptions, null, 2));
   
   // Connect to TikTok with options
   const tiktokLive = new WebcastPushConnection(connectionOptions);
@@ -104,6 +108,8 @@ wss.on('connection', (ws, req) => {
       errorMessage = 'TikTok user not found';
     } else if (err.message.includes('rate limit')) {
       errorMessage = 'TikTok rate limit reached - try again later';
+    } else if (err.message.includes('Missing or invalid value for \'uniqueId\'')) {
+      errorMessage = 'Invalid username format';
     }
     
     ws.send(JSON.stringify({ 
@@ -119,7 +125,7 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
