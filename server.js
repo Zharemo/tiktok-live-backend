@@ -137,8 +137,8 @@ wss.on('connection', async (ws, req) => {
         }
     });
     
-    // Setup connection options
-    const connectionOptions = {
+    // Create TikTok connection with all required parameters
+    const tiktokConnection = new EnhancedTikTokConnection({
         uniqueId: username,
         processInitialData: true,
         enableExtendedGiftInfo: true,
@@ -152,21 +152,10 @@ wss.on('connection', async (ws, req) => {
             "cookie_enabled": true,
             "screen_width": 1920,
             "screen_height": 1080
-        }
-    };
-    
-    // Add any authentication cookies if provided
-    if (authHeaders.sessionid || authHeaders['sid_tt']) {
-        console.log('Using authenticated connection with provided cookies');
-        connectionOptions.sessionId = authHeaders.sessionid || authHeaders['sid_tt'];
-        
-        if (authHeaders['tt_csrf_token']) {
-            connectionOptions.csrfToken = authHeaders['tt_csrf_token'];
-        }
-    }
-    
-    // Create TikTok connection with the full options object
-    const tiktokConnection = new EnhancedTikTokConnection(connectionOptions);
+        },
+        sessionId: authHeaders.sessionid || authHeaders['sid_tt'],
+        csrfToken: authHeaders['tt_csrf_token']
+    });
     
     try {
         await tiktokConnection.connect();
