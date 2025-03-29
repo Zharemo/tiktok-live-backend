@@ -19,7 +19,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zharemo/tiktok-live-backend"
+    "url": "git+https://github.com/Zharemo/tiktok-live-backend.git"
   },
   "keywords": [
     "tiktok",
