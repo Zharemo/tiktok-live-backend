@@ -5,7 +5,7 @@ const { WebcastPushConnection } = require('tiktok-live-connector');
 // Create HTTP server
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('TikTok Live WebSocket Server Running');
+    res.end('TikTok Self-Livestream Monitoring Service');
 });
 
 // Create WebSocket server
@@ -14,7 +14,7 @@ const wss = new WebSocket.Server({ server });
 // Active connections
 const activeConnections = new Map();
 
-// Custom connection wrapper for improved error handling
+// Custom connection wrapper with retry logic
 class EnhancedTikTokConnection {
     constructor(options) {
         this.options = options;
@@ -88,12 +88,59 @@ class EnhancedTikTokConnection {
     }
 }
 
+// Check if a TikTok user is currently live
+async function checkIfUserIsLive(sessionId, username) {
+    try {
+        // Create temporary connection just to check live status
+        const tempConnection = new WebcastPushConnection({
+            uniqueId: username,
+            sessionId: sessionId,
+            enableExtendedGiftInfo: false,
+            enableWebsocketUpgrade: false,
+            requestPollingIntervalMs: 0,
+            clientParams: {
+                app_language: "en-US",
+                device_platform: "web"
+            }
+        });
+        
+        // Try to connect - if successful, user is live
+        await tempConnection.connect();
+        
+        // Disconnect right away - we just needed to check
+        tempConnection.disconnect();
+        
+        return true;
+    } catch (error) {
+        // If we get specific error that user is not live
+        if (error.message.includes('LIVEMONITORING_SIGN_URL_FAIL_CAUSE_CLOSED_LIVE')) {
+            return false;
+        }
+        
+        // Handle other errors as needed
+        console.error(`Error checking live status for ${username}:`, error.message);
+        return false;
+    }
+}
+
 wss.on('connection', async (ws, req) => {
     console.log('New connection received');
     
+    // Get authentication parameters from headers
+    const authHeaders = {};
+    Object.keys(req.headers).forEach(key => {
+        if (key.toLowerCase().startsWith('x-tiktok-')) {
+            const cookieName = key.toLowerCase().replace('x-tiktok-', '');
+            authHeaders[cookieName] = req.headers[key];
+        }
+    });
+    
     // Parse URL parameters
     const url = new URL(req.url, `http://${req.headers.host}`);
-    let username = url.searchParams.get('username');
+    const action = url.searchParams.get('action') || 'monitor';
+    
+    // Get the authenticated user's username
+    const username = url.searchParams.get('username');
     
     if (!username) {
         ws.send(JSON.stringify({
@@ -104,22 +151,41 @@ wss.on('connection', async (ws, req) => {
         return;
     }
     
-    username = username.replace('@', '');
+    // Check if we have valid session cookies
+    if (!authHeaders.sessionid && !authHeaders['sid_tt']) {
+        ws.send(JSON.stringify({
+            type: 'error',
+            message: 'TikTok authentication required'
+        }));
+        ws.close();
+        return;
+    }
+    
+    // Handle different actions
+    if (action === 'check_live') {
+        // Just check if user is live without monitoring
+        const isLive = await checkIfUserIsLive(
+            authHeaders.sessionid || authHeaders['sid_tt'], 
+            username
+        );
+        
+        ws.send(JSON.stringify({
+            type: 'live_status',
+            isLive: isLive,
+            username: username
+        }));
+        
+        ws.close();
+        return;
+    }
+    
+    // Default action: Monitor livestream
     console.log(`Connecting to @${username}'s livestream...`);
     
     ws.send(JSON.stringify({
         type: 'status',
-        message: `Connecting to @${username}'s livestream...`
+        message: `Connecting to your livestream...`
     }));
-    
-    // Get authentication parameters from headers
-    const authHeaders = {};
-    Object.keys(req.headers).forEach(key => {
-        if (key.toLowerCase().startsWith('x-tiktok-')) {
-            const cookieName = key.toLowerCase().replace('x-tiktok-', '');
-            authHeaders[cookieName] = req.headers[key];
-        }
-    });
     
     // Setup connection options
     const connectionOptions = {
@@ -138,14 +204,10 @@ wss.on('connection', async (ws, req) => {
         }
     };
     
-    // Add any authentication cookies if provided
-    if (authHeaders.sessionid || authHeaders['sid_tt']) {
-        console.log('Using authenticated connection with provided cookies');
-        connectionOptions.sessionId = authHeaders.sessionid || authHeaders['sid_tt'];
-        
-        if (authHeaders['tt_csrf_token']) {
-            connectionOptions.csrfToken = authHeaders['tt_csrf_token'];
-        }
+    // Add authentication cookies
+    connectionOptions.sessionId = authHeaders.sessionid || authHeaders['sid_tt'];
+    if (authHeaders['tt_csrf_token']) {
+        connectionOptions.csrfToken = authHeaders['tt_csrf_token'];
     }
     
     // Create TikTok connection
@@ -164,7 +226,7 @@ wss.on('connection', async (ws, req) => {
         // Send success message
         ws.send(JSON.stringify({
             type: 'connected',
-            message: `Connected to @${username}'s livestream!`
+            message: `Connected to your livestream!`
         }));
         
         // Forward all TikTok events
@@ -204,7 +266,7 @@ wss.on('connection', async (ws, req) => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'streamEnd',
-                    message: 'Stream ended'
+                    message: 'Your stream ended'
                 }));
             }
             
@@ -246,7 +308,7 @@ wss.on('connection', async (ws, req) => {
         let errorMessage = `Failed to connect: ${error.message}`;
         
         if (error.message.includes('LIVEMONITORING_SIGN_URL_FAIL_CAUSE_CLOSED_LIVE')) {
-            errorMessage = 'This user is not currently live streaming';
+            errorMessage = 'You are not currently live streaming';
         } else if (error.message.includes('rate limit')) {
             errorMessage = 'TikTok rate limit reached - try again later';
         } else if (error.message.includes('User not found')) {
