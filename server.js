@@ -1,6 +1,6 @@
 const WebSocket = require('ws');
 const http = require('http');
-const { TikTokConnectionWrapper, WebcastPushConnection } = require('tiktok-live-connector');
+const { WebcastPushConnection } = require('tiktok-live-connector');
 
 // Create HTTP server
 const server = http.createServer((req, res) => {
@@ -14,17 +14,32 @@ const wss = new WebSocket.Server({ server });
 // Active connections
 const activeConnections = new Map();
 
-// Connection wrapper for improved error handling
-class EnhancedTikTokConnection extends TikTokConnectionWrapper {
+// Custom connection wrapper for improved error handling
+class EnhancedTikTokConnection {
     constructor(options) {
-        super(options);
+        this.options = options;
+        this.connection = null;
         this.retryCount = 0;
         this.maxRetries = 3;
+        this.eventHandlers = {};
     }
     
     async connect() {
         try {
-            return await super.connect();
+            // Create a new connection
+            this.connection = new WebcastPushConnection(this.options);
+            
+            // Connect and register any event handlers
+            await this.connection.connect();
+            
+            // Re-register any event handlers
+            Object.keys(this.eventHandlers).forEach(event => {
+                this.eventHandlers[event].forEach(handler => {
+                    this.connection.on(event, handler);
+                });
+            });
+            
+            return this.connection;
         } catch (error) {
             console.error(`Connection error (attempt ${this.retryCount + 1}/${this.maxRetries}):`, error.message);
             
@@ -45,6 +60,30 @@ class EnhancedTikTokConnection extends TikTokConnectionWrapper {
             }
             
             throw error;
+        }
+    }
+    
+    on(event, callback) {
+        // Store the handler for reconnection purposes
+        if (!this.eventHandlers[event]) {
+            this.eventHandlers[event] = [];
+        }
+        this.eventHandlers[event].push(callback);
+        
+        // Register with the current connection if it exists
+        if (this.connection) {
+            this.connection.on(event, callback);
+        }
+    }
+    
+    disconnect() {
+        if (this.connection) {
+            try {
+                this.connection.disconnect();
+            } catch (error) {
+                console.error('Error disconnecting:', error);
+            }
+            this.connection = null;
         }
     }
 }
