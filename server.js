@@ -156,7 +156,42 @@ wss.on('connection', async (ws, req) => {
         sessionId: authHeaders.sessionid || authHeaders['sid_tt'],
         csrfToken: authHeaders['tt_csrf_token']
     });
-    
+
+    // Handle WebSocket close with proper error handling
+    ws.on('close', (code, reason) => {
+        console.log(`Connection closed for ${username} with code ${code}`);
+        
+        // Clean up
+        if (activeConnections.has(ws)) {
+            const conn = activeConnections.get(ws);
+            conn.disconnect();
+            activeConnections.delete(ws);
+        }
+    });
+
+    // Handle WebSocket errors with proper error handling
+    ws.on('error', (error) => {
+        console.error(`WebSocket error for ${username}:`, error);
+        
+        // Clean up
+        if (activeConnections.has(ws)) {
+            const conn = activeConnections.get(ws);
+            conn.disconnect();
+            activeConnections.delete(ws);
+        }
+        
+        // Send error message if connection is still open
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Connection error occurred'
+            }));
+        }
+        
+        // Close with normal closure code
+        ws.close(1000);
+    });
+
     try {
         await tiktokConnection.connect();
         console.log(`Connected to @${username}'s livestream!`);
@@ -214,32 +249,7 @@ wss.on('connection', async (ws, req) => {
             // Clean up
             tiktokConnection.disconnect();
             activeConnections.delete(ws);
-            ws.close();
-        });
-        
-        // Handle WebSocket close
-        ws.on('close', () => {
-            console.log(`Connection closed for ${username}`);
-            
-            // Clean up
-            if (activeConnections.has(ws)) {
-                const conn = activeConnections.get(ws);
-                conn.disconnect();
-                activeConnections.delete(ws);
-            }
-        });
-        
-        // Handle WebSocket errors
-        ws.on('error', (error) => {
-            console.error(`WebSocket error for ${username}:`, error);
-            
-            if (activeConnections.has(ws)) {
-                const conn = activeConnections.get(ws);
-                conn.disconnect();
-                activeConnections.delete(ws);
-            }
-            
-            ws.close();
+            ws.close(1000); // Use normal closure code
         });
         
     } catch (error) {
@@ -258,14 +268,16 @@ wss.on('connection', async (ws, req) => {
             errorMessage = 'TikTok login required to view this stream';
         }
         
-        // Send error message
-        ws.send(JSON.stringify({
-            type: 'error',
-            message: errorMessage
-        }));
+        // Send error message if connection is still open
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'error',
+                message: errorMessage
+            }));
+        }
         
-        // Close the connection
-        ws.close();
+        // Close with normal closure code
+        ws.close(1000);
     }
 });
 
