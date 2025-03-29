@@ -9,17 +9,13 @@
   },
   "dependencies": {
     "ws": "^8.16.0",
-    "tiktok-live-connector": "^0.9.33"
+    "tiktok-live-connector": "^1.0.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   },
   "engines": {
     "node": ">=14"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Zharemo/tiktok-live-backend.git"
   },
   "keywords": [
     "tiktok",
