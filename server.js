@@ -84,6 +84,31 @@ wss.on('connection', async (ws, req) => {
             }
         });
 
+        // Follow event handler
+        tiktokLive.on('follow', data => {
+            if (ws.readyState === WebSocket.OPEN) {
+                console.log(`New follower: ${data.uniqueId}`);
+                ws.send(JSON.stringify({
+                    type: 'follow',
+                    uniqueId: data.uniqueId,
+                    nickname: data.nickname || data.uniqueId
+                }));
+            }
+        });
+
+        // Gift handler
+        tiktokLive.on('gift', data => {
+            if (ws.readyState === WebSocket.OPEN && data.diamondCount > 0) {
+                ws.send(JSON.stringify({
+                    type: 'gift',
+                    uniqueId: data.uniqueId,
+                    giftName: data.giftName,
+                    repeatCount: data.repeatCount,
+                    diamondCount: data.diamondCount
+                }));
+            }
+        });
+
         // Stream end handler
         tiktokLive.on('streamEnd', () => {
             if (ws.readyState === WebSocket.OPEN) {
