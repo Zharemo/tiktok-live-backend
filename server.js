@@ -1,104 +1,202 @@
-const express = require('express');
-const http = require('http');
 const WebSocket = require('ws');
+const http = require('http');
 const { WebcastPushConnection } = require('tiktok-live-connector');
 
-const app = express();
-const server = http.createServer(app);
+// Create HTTP server
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('TikTok Live WebSocket Server Running');
+});
+
+// Create WebSocket server
 const wss = new WebSocket.Server({ server });
 
-// Enable CORS for all routes
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-    next();
-});
+// Active connections
+const activeConnections = new Map();
 
-// Status endpoint
-app.get('/', (req, res) => {
-    res.json({ status: 'TikTok Live Backend Running' });
-});
+// Custom connection wrapper for improved error handling
+class EnhancedTikTokConnection {
+    constructor(options) {
+        this.options = options;
+        this.connection = null;
+        this.retryCount = 0;
+        this.maxRetries = 3;
+        this.eventHandlers = {};
+    }
+    
+    async connect() {
+        try {
+            // Create a new connection
+            this.connection = new WebcastPushConnection(this.options);
+            
+            // Connect and register any event handlers
+            await this.connection.connect();
+            
+            // Re-register any event handlers
+            Object.keys(this.eventHandlers).forEach(event => {
+                this.eventHandlers[event].forEach(handler => {
+                    this.connection.on(event, handler);
+                });
+            });
+            
+            return this.connection;
+        } catch (error) {
+            console.error(`Connection error (attempt ${this.retryCount + 1}/${this.maxRetries}):`, error.message);
+            
+            if (this.retryCount < this.maxRetries) {
+                this.retryCount++;
+                console.log(`Retrying connection in ${this.retryCount * 2} seconds...`);
+                
+                return new Promise((resolve, reject) => {
+                    setTimeout(async () => {
+                        try {
+                            const result = await this.connect();
+                            resolve(result);
+                        } catch (error) {
+                            reject(error);
+                        }
+                    }, this.retryCount * 2000);
+                });
+            }
+            
+            throw error;
+        }
+    }
+    
+    on(event, callback) {
+        // Store the handler for reconnection purposes
+        if (!this.eventHandlers[event]) {
+            this.eventHandlers[event] = [];
+        }
+        this.eventHandlers[event].push(callback);
+        
+        // Register with the current connection if it exists
+        if (this.connection) {
+            this.connection.on(event, callback);
+        }
+    }
+    
+    disconnect() {
+        if (this.connection) {
+            try {
+                this.connection.disconnect();
+            } catch (error) {
+                console.error('Error disconnecting:', error);
+            }
+            this.connection = null;
+        }
+    }
+}
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({ status: 'healthy' });
-});
-
-// Store active connections
-const connections = new Map();
-
-// WebSocket connection handler
 wss.on('connection', async (ws, req) => {
-    console.log('New WebSocket connection received');
+    console.log('New connection received');
     
     // Parse URL parameters
-    const urlParams = new URLSearchParams(req.url.split('?')[1]);
-    const username = urlParams.get('username');
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    let username = url.searchParams.get('username');
+    let uniqueId = url.searchParams.get('uniqueId');
+    
+    // Use uniqueId if available, otherwise fall back to username
+    if (uniqueId) {
+        username = uniqueId;
+    }
     
     if (!username) {
-        ws.send(JSON.stringify({ 
-            type: 'error', 
-            message: 'Username parameter is required' 
+        ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Username parameter is required'
         }));
         ws.close();
         return;
     }
-
-    // Clean username (remove @ if present)
-    const cleanUsername = username.startsWith('@') ? username.substring(1) : username;
-    console.log(`Attempting to connect to @${cleanUsername}'s livestream...`);
-
-    // Create TikTok connection
-    const tiktokLive = new WebcastPushConnection(cleanUsername, {
+    
+    // Validate username format
+    if (username.length < 2 || username.length > 24) {
+        ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Invalid username format. Username must be between 2 and 24 characters.'
+        }));
+        ws.close();
+        return;
+    }
+    
+    username = username.replace('@', '');
+    console.log(`Connecting to @${username}'s livestream...`);
+    
+    ws.send(JSON.stringify({
+        type: 'status',
+        message: `Connecting to @${username}'s livestream...`
+    }));
+    
+    // Get authentication parameters from headers
+    const authHeaders = {};
+    Object.keys(req.headers).forEach(key => {
+        if (key.toLowerCase().startsWith('x-tiktok-')) {
+            const cookieName = key.toLowerCase().replace('x-tiktok-', '');
+            authHeaders[cookieName] = req.headers[key];
+        }
+    });
+    
+    // Setup connection options
+    const connectionOptions = {
         processInitialData: true,
-        enableExtendedGiftInfo: false,
+        enableExtendedGiftInfo: true,
         enableWebsocketUpgrade: true,
         requestPollingIntervalMs: 2000,
         clientParams: {
             "app_language": "en-US",
-            "device_platform": "web"
+            "device_platform": "web",
+            "browser_name": "Mozilla",
+            "browser_version": "5.0",
+            "cookie_enabled": true,
+            "screen_width": 1920,
+            "screen_height": 1080
         }
-    });
-
-    try {
-        await tiktokLive.connect();
+    };
+    
+    // Add any authentication cookies if provided
+    if (authHeaders.sessionid || authHeaders['sid_tt']) {
+        console.log('Using authenticated connection with provided cookies');
+        connectionOptions.sessionId = authHeaders.sessionid || authHeaders['sid_tt'];
         
-        console.log(`Connected to @${cleanUsername}'s livestream!`);
-        ws.send(JSON.stringify({ 
+        if (authHeaders['tt_csrf_token']) {
+            connectionOptions.csrfToken = authHeaders['tt_csrf_token'];
+        }
+    }
+    
+    // Create TikTok connection
+    const tiktokConnection = new EnhancedTikTokConnection({
+        ...connectionOptions,
+        uniqueId: username
+    });
+    
+    try {
+        await tiktokConnection.connect();
+        console.log(`Connected to @${username}'s livestream!`);
+        
+        // Store the connection
+        activeConnections.set(ws, tiktokConnection);
+        
+        // Send success message
+        ws.send(JSON.stringify({
             type: 'connected',
-            message: `Connected to @${cleanUsername}'s livestream`
+            message: `Connected to @${username}'s livestream!`
         }));
-
-        // Store connection for cleanup
-        connections.set(ws, tiktokLive);
-
-        // Chat message handler
-        tiktokLive.on('chat', data => {
+        
+        // Forward all TikTok events
+        tiktokConnection.on('chat', data => {
             if (ws.readyState === WebSocket.OPEN) {
-                console.log(`${data.uniqueId}: ${data.comment}`);
                 ws.send(JSON.stringify({
                     type: 'chat',
                     uniqueId: data.uniqueId,
-                    comment: data.comment
+                    comment: data.comment,
+                    userId: data.userId
                 }));
             }
         });
-
-        // Follow event handler
-        tiktokLive.on('follow', data => {
-            if (ws.readyState === WebSocket.OPEN) {
-                console.log(`New follower: ${data.uniqueId}`);
-                ws.send(JSON.stringify({
-                    type: 'follow',
-                    uniqueId: data.uniqueId,
-                    nickname: data.nickname || data.uniqueId
-                }));
-            }
-        });
-
-        // Gift handler
-        tiktokLive.on('gift', data => {
-            if (ws.readyState === WebSocket.OPEN && data.diamondCount > 0) {
+        
+        tiktokConnection.on('gift', data => {
+            if (ws.readyState === WebSocket.OPEN && data.repeatCount > 0) {
                 ws.send(JSON.stringify({
                     type: 'gift',
                     uniqueId: data.uniqueId,
@@ -108,75 +206,90 @@ wss.on('connection', async (ws, req) => {
                 }));
             }
         });
-
-        // Stream end handler
-        tiktokLive.on('streamEnd', () => {
+        
+        tiktokConnection.on('roomUser', data => {
             if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ 
+                ws.send(JSON.stringify({
+                    type: 'viewerCount',
+                    viewerCount: data.viewerCount
+                }));
+            }
+        });
+        
+        tiktokConnection.on('streamEnd', () => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
                     type: 'streamEnd',
                     message: 'Stream ended'
                 }));
             }
-            cleanup(ws);
+            
+            // Clean up
+            tiktokConnection.disconnect();
+            activeConnections.delete(ws);
+            ws.close();
         });
-
-        // Error handler
-        tiktokLive.on('error', err => {
-            console.error('TikTok connection error:', err);
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ 
-                    type: 'error',
-                    message: err.message || 'Connection error occurred'
-                }));
+        
+        // Handle WebSocket close
+        ws.on('close', () => {
+            console.log(`Connection closed for ${username}`);
+            
+            // Clean up
+            if (activeConnections.has(ws)) {
+                const conn = activeConnections.get(ws);
+                conn.disconnect();
+                activeConnections.delete(ws);
             }
         });
-
-    } catch (err) {
-        console.error(`Failed to connect to @${cleanUsername}'s livestream:`, err);
-        ws.send(JSON.stringify({ 
+        
+        // Handle WebSocket errors
+        ws.on('error', (error) => {
+            console.error(`WebSocket error for ${username}:`, error);
+            
+            if (activeConnections.has(ws)) {
+                const conn = activeConnections.get(ws);
+                conn.disconnect();
+                activeConnections.delete(ws);
+            }
+            
+            ws.close();
+        });
+        
+    } catch (error) {
+        console.error(`Failed to connect to @${username}'s livestream:`, error.message);
+        
+        // Handle specific error scenarios
+        let errorMessage = `Failed to connect: ${error.message}`;
+        
+        if (error.message.includes('LIVEMONITORING_SIGN_URL_FAIL_CAUSE_CLOSED_LIVE')) {
+            errorMessage = 'This user is not currently live streaming';
+        } else if (error.message.includes('rate limit')) {
+            errorMessage = 'TikTok rate limit reached - try again later';
+        } else if (error.message.includes('User not found')) {
+            errorMessage = 'TikTok user not found';
+        } else if (error.message.includes('Login required')) {
+            errorMessage = 'TikTok login required to view this stream';
+        }
+        
+        // Send error message
+        ws.send(JSON.stringify({
             type: 'error',
-            message: err.message || 'Failed to connect to livestream'
+            message: errorMessage
         }));
-        cleanup(ws);
-    }
-
-    // Handle client disconnect
-    ws.on('close', () => {
-        console.log(`Connection closed for @${cleanUsername}`);
-        cleanup(ws);
-    });
-
-    // Handle client errors
-    ws.on('error', (error) => {
-        console.error(`WebSocket error for @${cleanUsername}:`, error);
-        cleanup(ws);
-    });
-});
-
-// Cleanup function
-function cleanup(ws) {
-    const tiktokLive = connections.get(ws);
-    if (tiktokLive) {
-        tiktokLive.disconnect();
-        connections.delete(ws);
-    }
-}
-
-// Handle process termination
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Cleaning up...');
-    wss.clients.forEach(ws => {
-        cleanup(ws);
+        
+        // Close the connection
         ws.close();
-    });
-    server.close(() => {
-        console.log('Server shut down complete');
-        process.exit(0);
-    });
+    }
 });
 
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`WebSocket URL: ws://localhost:${PORT}`);
+// Handle errors
+wss.on('error', (error) => {
+    console.error('WebSocket server error:', error);
 });
+
+// Start server
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Server started on port ${PORT}`);
+    console.log(`WebSocket URL: ws://localhost:${PORT}`);
+}); 
