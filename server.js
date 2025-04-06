@@ -7,6 +7,15 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// Add reconnection tracking
+const reconnectDelays = new Map(); // Track reconnection delays per username
+const MAX_RETRY_DELAY = 3600; // Maximum delay of 1 hour
+const BASE_RETRY_DELAY = 2; // Start with 2 second delay
+
+// Store active connections and their retry counts
+const connections = new Map();
+const retryAttempts = new Map();
+
 // Enable CORS for all routes
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
@@ -24,8 +33,13 @@ app.get('/health', (req, res) => {
     res.json({ status: 'healthy' });
 });
 
-// Store active connections
-const connections = new Map();
+// Helper function to calculate exponential backoff
+function calculateRetryDelay(username) {
+    const attempts = retryAttempts.get(username) || 0;
+    const delay = Math.min(BASE_RETRY_DELAY * Math.pow(2, attempts), MAX_RETRY_DELAY);
+    retryAttempts.set(username, attempts + 1);
+    return delay;
+}
 
 // WebSocket connection handler
 wss.on('connection', async (ws, req) => {
@@ -46,22 +60,49 @@ wss.on('connection', async (ws, req) => {
 
     // Clean username (remove @ if present)
     const cleanUsername = username.startsWith('@') ? username.substring(1) : username;
+    
+    // Check if user is rate limited
+    const currentTime = Date.now();
+    const reconnectTime = reconnectDelays.get(cleanUsername);
+    
+    if (reconnectTime && currentTime < reconnectTime) {
+        const retryAfter = Math.ceil((reconnectTime - currentTime) / 1000);
+        ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Rate limited. Please try again later.',
+            retryAfter: retryAfter
+        }));
+        ws.close();
+        return;
+    }
+
     console.log(`Attempting to connect to @${cleanUsername}'s livestream...`);
 
-    // Create TikTok connection
+    // Create TikTok connection with more robust options
     const tiktokLive = new WebcastPushConnection(cleanUsername, {
         processInitialData: true,
         enableExtendedGiftInfo: false,
         enableWebsocketUpgrade: true,
         requestPollingIntervalMs: 2000,
+        requestHeaders: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        },
         clientParams: {
             "app_language": "en-US",
-            "device_platform": "web"
+            "device_platform": "web",
+            "browser_language": "en",
+            "browser_platform": "web",
+            "browser_name": "Mozilla",
+            "browser_version": "5.0"
         }
     });
 
     try {
         await tiktokLive.connect();
+        
+        // Reset retry attempts on successful connection
+        retryAttempts.delete(cleanUsername);
+        reconnectDelays.delete(cleanUsername);
         
         console.log(`Connected to @${cleanUsername}'s livestream!`);
         ws.send(JSON.stringify({ 
@@ -132,27 +173,48 @@ wss.on('connection', async (ws, req) => {
             cleanup(ws);
         });
 
-        // Error handler
+        // Enhanced error handling
         tiktokLive.on('error', err => {
             console.error('TikTok connection error:', err);
+            
+            let retryAfter = 0;
+            if (err.message?.includes('InitialFetchError')) {
+                retryAfter = calculateRetryDelay(cleanUsername);
+                reconnectDelays.set(cleanUsername, Date.now() + (retryAfter * 1000));
+            }
+            
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ 
                     type: 'error',
-                    message: err.message || 'Connection error occurred'
+                    message: err.message || 'Connection error occurred',
+                    retryAfter: retryAfter
                 }));
+            }
+            
+            if (retryAfter > 0) {
+                cleanup(ws);
             }
         });
 
     } catch (err) {
         console.error(`Failed to connect to @${cleanUsername}'s livestream:`, err);
+        
+        let retryAfter = 0;
+        if (err.message?.includes('InitialFetchError')) {
+            retryAfter = calculateRetryDelay(cleanUsername);
+            reconnectDelays.set(cleanUsername, Date.now() + (retryAfter * 1000));
+        }
+        
         ws.send(JSON.stringify({ 
             type: 'error',
-            message: err.message || 'Failed to connect to livestream'
+            message: err.message || 'Failed to connect to livestream',
+            retryAfter: retryAfter
         }));
+        
         cleanup(ws);
     }
 
-    // Handle client disconnect
+    // Enhanced cleanup on disconnect
     ws.on('close', () => {
         console.log(`Connection closed for @${cleanUsername}`);
         cleanup(ws);
@@ -165,12 +227,24 @@ wss.on('connection', async (ws, req) => {
     });
 });
 
-// Cleanup function
+// Enhanced cleanup function
 function cleanup(ws) {
     const tiktokLive = connections.get(ws);
     if (tiktokLive) {
-        tiktokLive.disconnect();
+        try {
+            tiktokLive.disconnect();
+        } catch (error) {
+            console.error('Error during disconnect:', error);
+        }
         connections.delete(ws);
+    }
+    
+    try {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.close();
+        }
+    } catch (error) {
+        console.error('Error closing WebSocket:', error);
     }
 }
 
