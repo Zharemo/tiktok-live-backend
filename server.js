@@ -1,7 +1,7 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const ConnectionWrapper = require('./connectionWrapper');
+const ConnectionWrapper = require('./ConnectionWrapper');
 const RateLimiter = require('./limiter');
 
 const app = express();
