@@ -1,4 +1,4 @@
-const { WebcastPushConnection } = require('tiktok-live-connector');
+const { WebcastPushConnection } = require('tiktok-live-backend');
 const { EventEmitter } = require('events');
 
 let globalConnectionCount = 0;
