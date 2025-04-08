@@ -1,14 +1,21 @@
 {
   "name": "tiktok-live-backend",
   "version": "1.0.0",
-  "main": "server.js",
+  "description": "TikTok Live Chat Reader Backend",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "http": "^0.0.1-security",
+    "tiktok-live-connector": "^1.0.0",
     "socket.io": "^4.7.2",
-    "tiktok-live-connector": "^1.4.0"
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
   }
 }
