@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: tiktok-live-backend
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: TIKTOK_USERNAME
+        value: through.jocelyn
