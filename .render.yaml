@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: tiktok-live-backend
+    name: tiktok-live-server
     env: node
     buildCommand: npm install
     startCommand: npm start
