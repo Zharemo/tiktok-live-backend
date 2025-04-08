@@ -1,35 +1,62 @@
-const { WebcastPushConnection } = require('tiktok-live-connector');
-const EventEmitter = require('events');
+const TikTokConnection = require('./tiktokConnection');
+const logger = require('./logger');
 
-class ConnectionWrapper extends EventEmitter {
-  constructor(username, options = {}) {
-    super();
-    this.connection = new WebcastPushConnection(username, options);
-    this.username = username;
-    this.eventNamesToListen = ['chat', 'gift', 'follow', 'like', 'share', 'subscribe', 'member', 'roomUser', 'tiktokConnected'];
-
-    this.eventNamesToListen.forEach(event => {
-      this.connection.on(event, (data) => {
-        this.emit('event', event, data);
-      });
-    });
-
-    this.connection.on('disconnected', () => {
-      console.warn('Disconnected from TikTok live');
-    });
+class ConnectionWrapper {
+  constructor() {
+    this.connections = new Map();
+    this.maxConnections = 10; // Maximum number of concurrent connections
   }
 
-  async connect(username) {
-    try {
-      if (this.connection.isConnected()) {
-        await this.connection.disconnect();
-      }
-      this.connection.username = username;
-      await this.connection.connect();
-      console.log(`Connected to ${username}`);
-    } catch (err) {
-      console.error('Failed to connect:', err);
+  async addConnection(username) {
+    if (this.connections.size >= this.maxConnections) {
+      logger.warn(`Maximum number of connections (${this.maxConnections}) reached`);
+      return false;
     }
+
+    if (this.connections.has(username)) {
+      logger.warn(`Connection for ${username} already exists`);
+      return false;
+    }
+
+    const connection = new TikTokConnection(username);
+    const success = await connection.connect();
+
+    if (success) {
+      this.connections.set(username, connection);
+      logger.info(`Added new connection for ${username}`);
+      return true;
+    }
+
+    return false;
+  }
+
+  removeConnection(username) {
+    if (this.connections.has(username)) {
+      const connection = this.connections.get(username);
+      connection.disconnect();
+      this.connections.delete(username);
+      logger.info(`Removed connection for ${username}`);
+      return true;
+    }
+    return false;
+  }
+
+  getConnection(username) {
+    return this.connections.get(username);
+  }
+
+  getAllConnections() {
+    return Array.from(this.connections.entries());
+  }
+
+  getConnectionCount() {
+    return this.connections.size;
+  }
+
+  clearAllConnections() {
+    this.connections.forEach(connection => connection.disconnect());
+    this.connections.clear();
+    logger.info('Cleared all connections');
   }
 }
 
