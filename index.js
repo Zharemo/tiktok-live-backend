@@ -1,86 +1,95 @@
 const express = require('express');
-const { createServer } = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const { WebcastPushConnection } = require('tiktok-live-connector');
+const http = require('http');
+const socketIo = require('socket.io');
+const { TikTokConnectionWrapper } = require('./utils/connectionWrapper');
+const { clientBlocked } = require('./utils/rateLimiter');
 const logger = require('./utils/logger');
 
 const app = express();
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
+const server = http.createServer(app);
+const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
   }
 });
 
-app.use(cors());
-app.use(express.json());
-
-// Store active connections
+// Store active TikTok connections
 const activeConnections = new Map();
 
+// Socket.IO connection handling
 io.on('connection', (socket) => {
   logger.info(`New client connected: ${socket.id}`);
 
-  socket.on('setUniqueId', async (uniqueId) => {
+  // Check if client is blocked by rate limiter
+  if (clientBlocked(io, socket)) {
+    socket.emit('error', 'Rate limit exceeded');
+    socket.disconnect();
+    return;
+  }
+
+  // Handle TikTok connection requests
+  socket.on('connectToTikTok', async ({ username }) => {
     try {
-      logger.info(`Setting up connection for: ${uniqueId}`);
-      
-      // If there's an existing connection, disconnect it
-      if (activeConnections.has(socket.id)) {
-        const oldConnection = activeConnections.get(socket.id);
-        await oldConnection.disconnect();
+      if (activeConnections.has(username)) {
+        socket.emit('error', 'Connection already exists for this username');
+        return;
       }
 
-      // Create new connection
-      const tiktokConnection = new WebcastPushConnection(uniqueId);
-      
-      // Store the connection
-      activeConnections.set(socket.id, tiktokConnection);
+      const tiktokConnection = new TikTokConnectionWrapper(username);
+      activeConnections.set(username, tiktokConnection);
 
-      // Set up event handlers
-      tiktokConnection.on('chat', (data) => {
-        socket.emit('chat', data);
+      // Forward TikTok events to the client
+      tiktokConnection.on('connected', (state) => {
+        socket.emit('connected', state);
       });
 
-      tiktokConnection.on('member', (data) => {
-        socket.emit('member', data);
+      tiktokConnection.on('disconnected', (reason) => {
+        socket.emit('disconnected', reason);
+        activeConnections.delete(username);
       });
 
-      tiktokConnection.on('roomUser', (data) => {
-        socket.emit('roomUser', data);
+      tiktokConnection.on('error', (error) => {
+        socket.emit('error', error);
       });
 
-      tiktokConnection.on('connected', (data) => {
-        socket.emit('tiktokConnected', {
-          isConnected: true,
-          upgradedToWebsocket: true,
-          roomId: data.roomId,
-          roomInfo: data.roomInfo
+      // Forward TikTok events
+      ['gift', 'chat', 'like', 'follow', 'share', 'join'].forEach(event => {
+        tiktokConnection.on(event, (data) => {
+          socket.emit(event, data);
         });
       });
 
-      // Connect to TikTok
       await tiktokConnection.connect();
-      
     } catch (error) {
-      logger.error(`Error setting up connection: ${error.message}`);
-      socket.emit('error', { message: error.message });
+      logger.error('Error connecting to TikTok:', error);
+      socket.emit('error', error.message);
     }
   });
 
-  socket.on('disconnect', async () => {
-    logger.info(`Client disconnected: ${socket.id}`);
-    if (activeConnections.has(socket.id)) {
-      const connection = activeConnections.get(socket.id);
-      await connection.disconnect();
-      activeConnections.delete(socket.id);
+  // Handle disconnection requests
+  socket.on('disconnectFromTikTok', ({ username }) => {
+    if (activeConnections.has(username)) {
+      const connection = activeConnections.get(username);
+      connection.disconnect();
+      activeConnections.delete(username);
+      socket.emit('disconnected', 'Client requested disconnect');
     }
+  });
+
+  // Handle client disconnection
+  socket.on('disconnect', () => {
+    logger.info(`Client disconnected: ${socket.id}`);
+    // Clean up any TikTok connections associated with this socket
+    activeConnections.forEach((connection, username) => {
+      connection.disconnect();
+      activeConnections.delete(username);
+    });
   });
 });
 
+// Start the server
 const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => {
+server.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
 });
