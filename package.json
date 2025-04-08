@@ -1,5 +1,5 @@
 {
-  "name": "tiktok-live-backend",
+  "name": "tiktok-live-socket-server",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
