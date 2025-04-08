@@ -12,19 +12,7 @@ const io = new Server(server, {
   },
 });
 
-const streamerId = process.env.TIKTOK_USERNAME || 'example_username';
-
-let connection = new ConnectionWrapper(streamerId, {
-  enableExtendedGiftInfo: true,
-  processInitialData: true,
-  requestPollingIntervalMs: 1000,
-  clientParams: {
-    app_language: "en-US",
-    device_platform: "web",
-    referer: "https://www.tiktok.com/",
-  },
-});
-
+let activeConnections = {};
 let rateLimiter = new RequestRateLimiter();
 
 app.get('/', (req, res) => {
@@ -32,24 +20,41 @@ app.get('/', (req, res) => {
 });
 
 io.on('connection', (socket) => {
-  console.log('Client connected');
+  console.log('Client connected:', socket.id);
 
-  // When a client wants to set uniqueId dynamically
-  socket.on('setUniqueId', async (uniqueId) => {
-    console.log(`Setting up connection for ${uniqueId}`);
-    await connection.connect(uniqueId);
+  // Wait for client to send their TikTok username
+  socket.on('setUniqueId', async (username) => {
+    if (!username) return;
+
+    console.log(`[${socket.id}] Connecting to TikTok user: ${username}`);
+
+    const conn = new ConnectionWrapper(username);
+
+    // Save connection to manage/disconnect later if needed
+    activeConnections[socket.id] = conn;
+
+    conn.on('event', (eventName, eventData) => {
+      if (rateLimiter.shouldProcess(eventData)) {
+        socket.emit(eventName, eventData);
+      }
+    });
+
+    try {
+      await conn.connect(username);
+    } catch (err) {
+      console.error(`Failed to connect to ${username}:`, err);
+      socket.emit('error', { message: 'Failed to connect to live stream.' });
+    }
   });
 
   socket.on('disconnect', () => {
-    console.log('Client disconnected');
-  });
-});
+    console.log('Client disconnected:', socket.id);
 
-connection.on('event', (eventName, eventData) => {
-  // Optional: throttle/frequency limit using your limiter
-  if (rateLimiter.shouldProcess(eventData)) {
-    io.emit(eventName, eventData);
-  }
+    if (activeConnections[socket.id]) {
+      activeConnections[socket.id].disconnect?.();
+      delete activeConnections[socket.id];
+    }
+  });
 });
 
 const PORT = process.env.PORT || 3000;
