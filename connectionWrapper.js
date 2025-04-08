@@ -1,63 +1,120 @@
-const TikTokConnection = require('./tiktokConnection');
+const { WebcastPushConnection } = require('tiktok-live-connector');
+const { EventEmitter } = require('events');
 const logger = require('./logger');
 
-class ConnectionWrapper {
-  constructor() {
-    this.connections = new Map();
-    this.maxConnections = 10; // Maximum number of concurrent connections
+let globalConnectionCount = 0;
+
+class TikTokConnectionWrapper extends EventEmitter {
+  constructor(uniqueId, options = {}, enableLog = true) {
+    super();
+    this.uniqueId = uniqueId;
+    this.enableLog = enableLog;
+
+    // Connection State
+    this.clientDisconnected = false;
+    this.reconnectEnabled = true;
+    this.reconnectCount = 0;
+    this.reconnectWaitMs = 1000;
+    this.maxReconnectAttempts = 5;
+
+    this.connection = new WebcastPushConnection(uniqueId, options);
+
+    this.connection.on('streamEnd', () => {
+      this.log(`streamEnd event received, giving up connection`);
+      this.reconnectEnabled = false;
+    });
+
+    this.connection.on('disconnected', () => {
+      globalConnectionCount -= 1;
+      this.log(`TikTok connection disconnected`);
+      this.scheduleReconnect();
+    });
+
+    this.connection.on('error', (err) => {
+      this.log(`Error event triggered: ${err.info}, ${err.exception}`);
+      logger.error(err);
+    });
+
+    // Forward all TikTok events to our wrapper
+    this.connection.on('gift', (data) => this.emit('gift', data));
+    this.connection.on('chat', (data) => this.emit('chat', data));
+    this.connection.on('like', (data) => this.emit('like', data));
+    this.connection.on('follow', (data) => this.emit('follow', data));
+    this.connection.on('share', (data) => this.emit('share', data));
+    this.connection.on('join', (data) => this.emit('join', data));
   }
 
-  async addConnection(username) {
-    if (this.connections.size >= this.maxConnections) {
-      logger.warn(`Maximum number of connections (${this.maxConnections}) reached`);
-      return false;
+  connect(isReconnect = false) {
+    this.connection.connect().then((state) => {
+      this.log(`${isReconnect ? 'Reconnected' : 'Connected'} to roomId ${state.roomId}, websocket: ${state.upgradedToWebsocket}`);
+      globalConnectionCount += 1;
+
+      // Reset reconnect vars
+      this.reconnectCount = 0;
+      this.reconnectWaitMs = 1000;
+
+      // Client disconnected while establishing connection => drop connection
+      if (this.clientDisconnected) {
+        this.connection.disconnect();
+        return;
+      }
+
+      // Notify client
+      if (!isReconnect) {
+        this.emit('connected', state);
+      }
+    }).catch((err) => {
+      this.log(`${isReconnect ? 'Reconnect' : 'Connection'} failed, ${err}`);
+      if (isReconnect) {
+        // Schedule the next reconnect attempt
+        this.scheduleReconnect(err);
+      } else {
+        // Notify client
+        this.emit('disconnected', err.toString());
+      }
+    });
+  }
+
+  scheduleReconnect(reason) {
+    if (!this.reconnectEnabled) {
+      return;
     }
 
-    if (this.connections.has(username)) {
-      logger.warn(`Connection for ${username} already exists`);
-      return false;
+    if (this.reconnectCount >= this.maxReconnectAttempts) {
+      this.log(`Give up connection, max reconnect attempts exceeded`);
+      this.emit('disconnected', `Connection lost. ${reason}`);
+      return;
     }
 
-    const connection = new TikTokConnection(username);
-    const success = await connection.connect();
+    this.log(`Try reconnect in ${this.reconnectWaitMs}ms`);
+    setTimeout(() => {
+      if (!this.reconnectEnabled || this.reconnectCount >= this.maxReconnectAttempts) {
+        return;
+      }
 
-    if (success) {
-      this.connections.set(username, connection);
-      logger.info(`Added new connection for ${username}`);
-      return true;
+      this.reconnectCount += 1;
+      this.reconnectWaitMs *= 2;
+      this.connect(true);
+    }, this.reconnectWaitMs);
+  }
+
+  disconnect() {
+    this.log(`Client connection disconnected`);
+    this.clientDisconnected = true;
+    this.reconnectEnabled = false;
+    if (this.connection.getState().isConnected) {
+      this.connection.disconnect();
     }
-
-    return false;
   }
 
-  removeConnection(username) {
-    if (this.connections.has(username)) {
-      const connection = this.connections.get(username);
-      connection.disconnect();
-      this.connections.delete(username);
-      logger.info(`Removed connection for ${username}`);
-      return true;
+  log(logString) {
+    if (this.enableLog) {
+      logger.info(`WRAPPER @${this.uniqueId}: ${logString}`);
     }
-    return false;
-  }
-
-  getConnection(username) {
-    return this.connections.get(username);
-  }
-
-  getAllConnections() {
-    return Array.from(this.connections.entries());
-  }
-
-  getConnectionCount() {
-    return this.connections.size;
-  }
-
-  clearAllConnections() {
-    this.connections.forEach(connection => connection.disconnect());
-    this.connections.clear();
-    logger.info('Cleared all connections');
   }
 }
 
-module.exports = ConnectionWrapper;
+module.exports = {
+  TikTokConnectionWrapper,
+  getGlobalConnectionCount: () => globalConnectionCount
+};
